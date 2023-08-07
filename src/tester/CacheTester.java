@@ -1,10 +1,10 @@
 package tester;
 
 import cache.CacheInterface;
-import implementations.ConcurrentLRUCache;
-import implementations.ConcurrentRequestCollapsingLRU;
-import implementations.LRUCache;
-import implementations.RequestCollapsingLRU;
+import cache.implementations.ConcurrentLRUCache;
+import cache.implementations.ConcurrentRequestCollapsingLRU;
+import cache.implementations.BlockingLRUCache;
+import cache.implementations.RequestCollapsingLRU;
 import tester.models.RType;
 import tester.models.Request;
 import tester.order.RandomOrganizer;
@@ -23,7 +23,7 @@ public class CacheTester {
     public static void main(String args[]) {
         int cacheSize = 5;
         final List<RequestOrganiser> organizers = Arrays.asList(new RandomOrganizer(), new SerialOrganizer(), new RotatingOrganizer());
-        final List<CacheInterface> cacheInterfaces = Arrays.asList(new LRUCache(cacheSize), new RequestCollapsingLRU(cacheSize), new ConcurrentLRUCache(cacheSize),
+        final List<CacheInterface> cacheInterfaces = Arrays.asList(new BlockingLRUCache(cacheSize), new RequestCollapsingLRU(cacheSize), new ConcurrentLRUCache(cacheSize),
                 new ConcurrentRequestCollapsingLRU(cacheSize));
         final int keySpace = 20, requestsPerKey = 50;
         final var requestMap = setupRequests(keySpace, requestsPerKey);
