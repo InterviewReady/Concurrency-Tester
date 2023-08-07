@@ -1,6 +1,8 @@
 package implementations;
 
 import cache.Cache;
+import models.DoublyLinkedList;
+import models.Node;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -12,10 +14,10 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class LRUCache extends Cache {
 
-    final int size;
-    Node head, tail;
-    Map<String, Node> store = new HashMap<>();
-    ReadWriteLock readWriteLock = new ReentrantReadWriteLock();
+    private final int size;
+    private final Map<String, Node<String>> store = new HashMap<>();
+    private final ReadWriteLock readWriteLock = new ReentrantReadWriteLock();
+    private final DoublyLinkedList<String> list = new DoublyLinkedList<>();
 
     public LRUCache(int size) {
         this.size = size;
@@ -27,28 +29,28 @@ public class LRUCache extends Cache {
             readWriteLock.writeLock().lock();
             if (store.containsKey(key)) {
                 hits++;
-                Node node = store.get(key);
-                delete(node);
-                updateHead(node);
+                Node<String> node = store.get(key);
+                list.delete(node);
+                list.updateHead(node);
                 return CompletableFuture.completedFuture(node.value);
             } else {
                 misses++;
                 if (store.size() == size) {
+                    Node<String> evicted = list.evict();
+                    store.remove(evicted.key);
                     evictions++;
-                    evict();
                 }
-                Future<String> future = database.get(key);
                 String result;
                 try {
-                    result = future.get(1, TimeUnit.SECONDS);
+                    result = database.get(key).get(1, TimeUnit.SECONDS);
 //                System.out.println("Fetched key: " + key + " time: " + System.nanoTime() / 1000000000);
                 } catch (Exception e) {
                     System.err.println("Failed to fetch key: " + key + " time: " + System.nanoTime() / 1000000000);
                     e.printStackTrace();
                     throw new IllegalStateException();
                 }
-                Node node = new Node(key, result);
-                updateHead(node);
+                Node<String> node = new Node<>(key, result);
+                list.updateHead(node);
                 store.put(key, node);
                 return CompletableFuture.completedFuture(result);
             }
@@ -61,9 +63,9 @@ public class LRUCache extends Cache {
     public Future<Void> put(String key, String value) {
         try {
             readWriteLock.writeLock().lock();
-            Node node = store.remove(key);
+            Node<String> node = store.remove(key);
             if (node != null) {
-                delete(node);
+                list.delete(node);
             }
             try {
                 database.set(key, value).get(1, TimeUnit.SECONDS);
@@ -77,39 +79,4 @@ public class LRUCache extends Cache {
             readWriteLock.writeLock().unlock();
         }
     }
-
-    private void updateHead(Node node) {
-        node.next = head;
-        node.prev = null;
-        if (head != null) {
-            head.prev = node;
-        }
-        head = node;
-        if (tail == null) {
-            tail = node;
-        }
-    }
-
-    private void evict() {
-        store.remove(tail.key);
-        tail = tail.prev;
-        if (tail == null) {
-            System.err.println("TAIL is null for store: " + store.keySet());
-            System.err.println("HEAD when tail is null: " + head);
-            throw new IllegalStateException();
-        }
-        tail.next = null;
-    }
-
-    private void delete(Node node) {
-        if (head == node)
-            head = node.next;
-        if (tail == node)
-            tail = node.prev;
-        if (node.next != null)
-            node.next.prev = node.prev;
-        if (node.prev != null)
-            node.prev.next = node.next;
-    }
 }
-

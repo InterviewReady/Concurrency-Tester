@@ -1,12 +1,12 @@
-package implementations;
+package models;
 
-class Node {
-    String key;
-    String value;
-    Node next;
-    Node prev;
+public class Node<T> {
+    public final String key;
+    public final T value;
+    public Node<T> next;
+    public Node<T> prev;
 
-    public Node(String key, String value) {
+    public Node(String key, T value) {
         this.key = key;
         this.value = value;
     }
