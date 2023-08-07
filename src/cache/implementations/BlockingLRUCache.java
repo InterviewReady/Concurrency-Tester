@@ -13,6 +13,7 @@ public class BlockingLRUCache extends LRUCache<String> {
     @Override
     public Future<String> get(String key) {
         try {
+            lock.writeLock().lock();
             if (store.containsKey(key)) {
                 hits++;
                 return CompletableFuture.completedFuture(moveToHead(key));
