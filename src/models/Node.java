@@ -1,12 +1,14 @@
 package models;
 
-public class Node<T> {
-    public final String key;
-    public final T value;
-    public Node<T> next;
-    public Node<T> prev;
+import java.util.concurrent.Future;
 
-    public Node(String key, T value) {
+public class Node {
+    public final String key;
+    public final Future<String> value;
+    public Node next;
+    public Node prev;
+
+    public Node(String key, Future<String> value) {
         this.key = key;
         this.value = value;
     }

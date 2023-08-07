@@ -1,10 +1,6 @@
 package tester;
 
-import cache.CacheInterface;
-import cache.implementations.ConcurrentLRUCache;
-import cache.implementations.ConcurrentRequestCollapsingLRU;
-import cache.implementations.BlockingLRUCache;
-import cache.implementations.RequestCollapsingLRU;
+import cache.implementations.LRUCache;
 import tester.models.RType;
 import tester.models.Request;
 import tester.order.RandomOrganizer;
@@ -22,25 +18,39 @@ import java.util.stream.Collectors;
 public class CacheTester {
     public static void main(String args[]) {
         int cacheSize = 5;
-        final List<RequestOrganiser> organizers = Arrays.asList(new RandomOrganizer(), new SerialOrganizer(), new RotatingOrganizer());
-        final List<CacheInterface> cacheInterfaces = Arrays.asList(new BlockingLRUCache(cacheSize), new RequestCollapsingLRU(cacheSize), new ConcurrentLRUCache(cacheSize),
-                new ConcurrentRequestCollapsingLRU(cacheSize));
+        final List<RequestOrganiser> organizers = Arrays.asList(
+                new RandomOrganizer(),
+                new SerialOrganizer(),
+                new RotatingOrganizer());
+        final List<RequestGenerator> generators = Arrays.asList(
+                new RequestGenerator(0.1),
+                new RequestGenerator(0.5),
+                new RequestGenerator(0.01)
+        );
         final int keySpace = 20, requestsPerKey = 50;
-        final var requestMap = setupRequests(keySpace, requestsPerKey);
-        for (final RequestOrganiser organizer : organizers) {
-            final var requests = organizer.setOrder(keySpace, requestsPerKey, requestMap);
-            for (final CacheInterface cache : cacheInterfaces) {
-                System.out.println("Configuration: " +cache.getClass().getSimpleName() + " + " + organizer.getClass().getSimpleName());
-                testCache(cache, requests);
+        for (final RequestGenerator generator : generators) {
+            final var requestMap = generator.setupRequests(keySpace, requestsPerKey);
+            for (final RequestOrganiser organizer : organizers) {
+                final var requests = organizer.setOrder(keySpace, requestsPerKey, requestMap);
+                final List<LRUCache> cacheInterfaces = Arrays.asList(
+                        new LRUCache("Blocking Cache", cacheSize, 1, false),
+                        new LRUCache("Blocking request collapsing cache", cacheSize, 1, true),
+                        new LRUCache("Concurrent Cache", cacheSize, 10, false),
+                        new LRUCache("Concurrent request collapsing cache", cacheSize, 10, true)
+                );
+                for (final LRUCache cache : cacheInterfaces) {
+                    System.out.println("Configuration: " + cache.getName() + " + " + organizer.getClass().getSimpleName() + " + writeProbability: " + generator.getWriteProbability());
+                    testCache(cache, requests);
+                }
             }
         }
         System.exit(0);
     }
 
-    private static void testCache(CacheInterface cache, List<Request> requests) {
+    private static void testCache(LRUCache cache, List<Request> requests) {
         final long startTime = System.nanoTime() / 1000000000;
         final List<CompletableFuture<Void>> tasks = new ArrayList<>();
-        final ExecutorService[] executorService = new ExecutorService[31];
+        final ExecutorService[] executorService = new ExecutorService[3];
         for (int i = 0; i < executorService.length; i++) {
             executorService[i] = Executors.newSingleThreadExecutor();
         }
@@ -66,17 +76,15 @@ public class CacheTester {
             if (request.getType().equals(RType.GET)) {
                 String result = null;
                 try {
-                    result = request.getResponse().get(2, TimeUnit.SECONDS);
+                    result = request.getResponse().get(10, TimeUnit.SECONDS);
                 } catch (Exception e) {
-                    printTrace(requests, request);
                     System.err.println("Failed to " + request.getType() + " key: " + request.getKey() + " time: " + System.nanoTime() / 1000000000);
                     e.printStackTrace();
-                    System.exit(0);
+                    printTraceAndExit(requests, request);
                 }
                 if (!currentValue.get(request.getKey()).equals(result)) {
-                    printTrace(requests, request);
-                    System.err.println("Mismatch in response state " + result + " and expected value:" + currentValue.get(request.getKey()) + " for key: " + request.getKey());
-                    System.exit(0);
+                    System.err.println("Mismatch in response state: " + result + " and expected value:" + currentValue.get(request.getKey()) + " for key: " + request.getKey());
+                    printTraceAndExit(requests, request);
                 }
             } else {
                 currentValue.put(request.getKey(), request.getValue());
@@ -86,28 +94,7 @@ public class CacheTester {
         System.out.println(cache.getStats());
     }
 
-    private static List<Request>[] setupRequests(int keySpace, int requestsPerKey) {
-        List<Request>[] requestMap = new List[keySpace];
-        for (int i = 0; i < requestMap.length; i++) {
-            requestMap[i] = new ArrayList<>();
-            final String key = UUID.randomUUID().toString();
-            requestMap[i].add(new Request(RType.PUT, key, UUID.randomUUID().toString()));
-            for (int j = 1; j < requestsPerKey; j++) {
-                requestMap[i].add(generateRequest(key));
-            }
-        }
-        return requestMap;
-    }
-
-    private static Request generateRequest(String key) {
-        if (Math.random() < 0.1) {
-            return new Request(RType.PUT, key, UUID.randomUUID().toString());
-        } else {
-            return new Request(RType.GET, key);
-        }
-    }
-
-    private static void printTrace(List<Request> requests, Request request) {
+    private static void printTraceAndExit(List<Request> requests, Request request) {
         System.err.println(requests.stream().filter(r -> r.getKey().equals(request.getKey())).map(r -> {
             try {
                 return r.getResponse().get();
@@ -115,5 +102,6 @@ public class CacheTester {
                 throw new IllegalStateException();
             }
         }).collect(Collectors.toList()));
+        System.exit(0);
     }
 }

@@ -13,11 +13,16 @@ public class Database implements DatabaseInterface {
     private final List<DBCall> pendingCalls;
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
     private final ScheduledExecutorService executorService;
+    private final double failureRate;
 
-    private int batchCompletion, clearance, concurrentRequests, hits;
+    private final LongAdder batchCompletion = new LongAdder(),
+            clearance = new LongAdder(),
+            concurrentRequests = new LongAdder(),
+            hits = new LongAdder();
 
-    public Database(final int batchThreshold) {
+    public Database(final int batchThreshold, double failureRate) {
         this.batchRequestThreshold = batchThreshold;
+        this.failureRate = failureRate;
         db = new HashMap<>();
         requestCount = new ConcurrentHashMap<>(batchRequestThreshold);
         pendingCalls = new ArrayList<>();
@@ -26,7 +31,7 @@ public class Database implements DatabaseInterface {
     }
 
     public Future<String> get(String key) {
-        hits++;
+        hits.increment();
         return addToRequestQueue(new DatabaseRequest(DBRType.GET, key));
     }
 
@@ -43,7 +48,7 @@ public class Database implements DatabaseInterface {
         LongAdder count = requestCount.get(databaseRequest.key);
         count.increment();
         if (count.sum() > 1) {
-            concurrentRequests++;
+            concurrentRequests.increment();
         }
         pendingCalls.add(dbCall);
         lock.writeLock().unlock();
@@ -59,7 +64,7 @@ public class Database implements DatabaseInterface {
             if (!pendingCalls.isEmpty()) {
                 boolean clearAll = pendingCalls.size() >= batchRequestThreshold;
                 if (clearAll) {
-                    batchCompletion++;
+                    batchCompletion.increment();
                 }
                 List<DBCall> completedRequests = new ArrayList<>();
                 Collections.shuffle(pendingCalls);
@@ -67,7 +72,7 @@ public class Database implements DatabaseInterface {
                     boolean oldEntry = System.nanoTime() - call.startTime > 10000000;
                     if (clearAll || oldEntry) {
                         if (!clearAll) {
-                            clearance++;
+                            clearance.sum();
                         }
                         DatabaseRequest request = call.request;
                         CompletableFuture<String> response = call.response;
@@ -100,10 +105,10 @@ public class Database implements DatabaseInterface {
 
     @Override
     public String getStats() {
-        return "clearances: " + clearance
-                + " batchCompletions: " + batchCompletion
-                + " concurrentRequests: " + concurrentRequests
-                + " hits: " + hits;
+        return "clearances: " + clearance.sum()
+                + " batchCompletions: " + batchCompletion.sum()
+                + " concurrentRequests: " + concurrentRequests.sum()
+                + " hits: " + hits.sum();
     }
 }
 

@@ -1,8 +1,8 @@
 package models;
 
-public class DoublyLinkedList<T> {
-    Node<T> head, tail;
-    public void updateHead(Node<T> node) {
+public class DoublyLinkedList {
+    Node head, tail;
+    public void updateHead(Node node) {
         node.next = head;
         node.prev = null;
         if (head != null) {
@@ -14,8 +14,8 @@ public class DoublyLinkedList<T> {
         }
     }
 
-    public Node<T> evict() {
-        final Node<T> deleted = tail;
+    public Node evict() {
+        final Node deleted = tail;
         tail = tail.prev;
         if (tail == null) {
             System.err.println("HEAD when tail is null: " + head);
@@ -25,7 +25,7 @@ public class DoublyLinkedList<T> {
         return deleted;
     }
 
-    public void delete(Node<T> node) {
+    public void delete(Node node) {
         if (head == node)
             head = node.next;
         if (tail == node)
