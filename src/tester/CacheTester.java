@@ -1,6 +1,8 @@
 package tester;
 
+import cache.CacheException;
 import cache.implementations.LRUCache;
+import database.Database;
 import tester.models.RType;
 import tester.models.Request;
 import tester.order.RandomOrganizer;
@@ -16,8 +18,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 public class CacheTester {
-    public static void main(String args[]) {
-        int cacheSize = 5;
+    public static void main(String[] args) {
         final List<RequestOrganiser> organizers = Arrays.asList(
                 new RandomOrganizer(),
                 new SerialOrganizer(),
@@ -27,20 +28,32 @@ public class CacheTester {
                 new RequestGenerator(0.5),
                 new RequestGenerator(0.01)
         );
-        final int keySpace = 20, requestsPerKey = 50;
+        final int keySpace = 30, requestsPerKey = 40;
         for (final RequestGenerator generator : generators) {
             final var requestMap = generator.setupRequests(keySpace, requestsPerKey);
             for (final RequestOrganiser organizer : organizers) {
                 final var requests = organizer.setOrder(keySpace, requestsPerKey, requestMap);
-                final List<LRUCache> cacheInterfaces = Arrays.asList(
-                        new LRUCache("Blocking Cache", cacheSize, 1, false),
-                        new LRUCache("Blocking request collapsing cache", cacheSize, 1, true),
-                        new LRUCache("Concurrent Cache", cacheSize, 10, false),
-                        new LRUCache("Concurrent request collapsing cache", cacheSize, 10, true)
-                );
-                for (final LRUCache cache : cacheInterfaces) {
-                    System.out.println("Configuration: " + cache.getName() + " + " + organizer.getClass().getSimpleName() + " + writeProbability: " + generator.getWriteProbability());
-                    testCache(cache, requests);
+                for (int factor = 2; factor <= 6; factor = factor + 2) {
+                    for (int batchThreshold = 5; batchThreshold <= keySpace; batchThreshold += keySpace / 3) {
+                        for (double failureRate = 0; failureRate < 0.03; failureRate += 0.01) {
+                            final int cacheSize = keySpace / factor;
+                            final List<LRUCache> cacheInterfaces = Arrays.asList(
+                                    new LRUCache("Blocking", cacheSize, 1, false, new Database(batchThreshold, failureRate)),
+                                    new LRUCache("Blocking Request Collapsing", cacheSize, 1, true, new Database(batchThreshold, failureRate)),
+                                    new LRUCache("Concurrent", cacheSize, cacheSize, false, new Database(batchThreshold, failureRate)),
+                                    new LRUCache("Concurrent Request Collapsing", cacheSize, cacheSize, true, new Database(batchThreshold, failureRate))
+                            );
+                            for (final LRUCache cache : cacheInterfaces) {
+                                System.out.println("Configuration: " + cache.getName()
+                                        + " + " + organizer.getClass().getSimpleName()
+                                        + " + writeProbability: " + generator.getWriteProbability()
+                                        + " + batchThreshold: " + batchThreshold
+                                        + " + failureRate: " + failureRate
+                                        + " + cacheSize: " + (100.0 / factor));
+                                testCache(cache, requests);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -63,6 +76,12 @@ public class CacheTester {
                     request.setResponse(cache.put(key, request.getValue()));
                 }
             }, executorService[Math.abs(key.hashCode()) % executorService.length]));
+            try {
+                Thread.sleep(1);
+            } catch (InterruptedException e) {
+                System.err.println("Thread sleep issues for request: " + request);
+                throw new RuntimeException(e);
+            }
         }
         try {
             CompletableFuture.allOf(tasks.toArray(new CompletableFuture[tasks.size()])).get(60, TimeUnit.SECONDS);
@@ -71,27 +90,36 @@ public class CacheTester {
             System.err.println("Problem when completing tasks");
             System.exit(0);
         }
+        int cacheFailures = 0;
         final Map<String, String> currentValue = new HashMap<>();
         for (final Request request : requests) {
-            if (request.getType().equals(RType.GET)) {
-                String result = null;
-                try {
-                    result = request.getResponse().get(10, TimeUnit.SECONDS);
-                } catch (Exception e) {
+            Object result = null;
+            boolean cacheFailure = false;
+            try {
+                result = request.getResponse().get(10, TimeUnit.SECONDS);
+            } catch (Exception e) {
+                if (e.getCause() instanceof CacheException) {
+                    cacheFailure = true;
+                    cacheFailures++;
+                } else {
                     System.err.println("Failed to " + request.getType() + " key: " + request.getKey() + " time: " + System.nanoTime() / 1000000000);
                     e.printStackTrace();
                     printTraceAndExit(requests, request);
                 }
-                if (!currentValue.get(request.getKey()).equals(result)) {
-                    System.err.println("Mismatch in response state: " + result + " and expected value:" + currentValue.get(request.getKey()) + " for key: " + request.getKey());
-                    printTraceAndExit(requests, request);
+            }
+            if (!cacheFailure) {
+                if (request.getType().equals(RType.GET)) {
+                    if (!Objects.equals(currentValue.get(request.getKey()), result)) {
+                        System.err.println("Mismatch in response state: " + result + " and expected value:" + currentValue.get(request.getKey()) + " for key: " + request.getKey());
+                        printTraceAndExit(requests, request);
+                    }
+                } else {
+                    currentValue.put(request.getKey(), request.getValue());
                 }
-            } else {
-                currentValue.put(request.getKey(), request.getValue());
             }
         }
         System.out.println("PASSED IN " + (System.nanoTime() / 1000000000d - startTime) + " SECONDS");
-        System.out.println(cache.getStats());
+        System.out.println("CacheFailures: " + cacheFailures + " " + cache.getStats());
     }
 
     private static void printTraceAndExit(List<Request> requests, Request request) {

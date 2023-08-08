@@ -1,6 +1,9 @@
 package cache.implementations;
 
 import cache.Cache;
+import cache.CacheException;
+import database.DBFailure;
+import database.DatabaseInterface;
 import models.DoublyLinkedList;
 import models.Node;
 
@@ -22,7 +25,12 @@ public class LRUCache extends Cache {
     private final boolean requestCollapsing;
     private final Statistics statistics;
 
-    public LRUCache(String name, int size, int dbThreadPool, boolean requestCollapsing) {
+    public LRUCache(String name,
+                    int size,
+                    int dbThreadPool,
+                    boolean requestCollapsing,
+                    DatabaseInterface database) {
+        super(database);
         this.name = name;
         this.size = size;
         this.dbQueryExecutors = new ExecutorService[dbThreadPool];
@@ -60,25 +68,25 @@ public class LRUCache extends Cache {
                 }
                 statistics.missesAfterWait.increment();
                 evict();
-                Future<String> value = database.get(key);
-                add(key, value);
-                return value;
+                return database.get(key);
             } finally {
                 lock.unlock();
             }
         }, getExecutor(key)).thenApply(future -> {
             try {
-                return future.get(1, TimeUnit.SECONDS);
+                String s = future.get(1, TimeUnit.SECONDS);
+                lock.lock();
+                add(key, CompletableFuture.completedFuture(s));
+                lock.unlock();
+                return s;
             } catch (Exception e) {
-                System.err.println("Failed to get key: " + key);
-                e.printStackTrace();
-                throw new IllegalStateException();
+                throw wrapAndHandleException(key, e);
             }
         });
     }
 
     @Override
-    public CompletableFuture<Void> put(String key, String value) {
+    public Future<Void> put(String key, String value) {
         beingModified[getHashIndex(key)].increment();
         return CompletableFuture.supplyAsync(() -> {
             lock.lock();
@@ -87,11 +95,22 @@ public class LRUCache extends Cache {
             try {
                 return database.set(key, value).get(1, TimeUnit.SECONDS);
             } catch (Exception e) {
-                System.err.println("Failed to get key: " + key);
-                e.printStackTrace();
-                throw new IllegalStateException();
+                throw wrapAndHandleException(key, e);
             }
         }, getExecutor(key)).thenAccept(__ -> beingModified[getHashIndex(key)].decrement());
+    }
+
+    private RuntimeException wrapAndHandleException(String key, Throwable e) {
+        if (e.getCause() instanceof DBFailure) {
+            lock.lock();
+            remove(key);
+            lock.unlock();
+            return new CacheException();
+        } else {
+            System.err.println("Failed to get key: " + key);
+            e.printStackTrace();
+            return new IllegalStateException(e);
+        }
     }
 
     private Future<String> moveToHead(String key) {
@@ -152,12 +171,12 @@ class Statistics {
     public String toString() {
         return "Statistics{" +
                 "hits=" + hits.sum() +
-                ", hitsAfterWait=" + hitsAfterWait.sum() +
                 ", misses=" + misses.sum() +
-                ", missesAfterWait=" + missesAfterWait.sum() +
-                ", evictions=" + evictions.sum() +
                 ", collapses=" + collapses.sum() +
                 ", waitInQueue=" + waitInQueue.sum() +
+                ", hitsAfterWait=" + hitsAfterWait.sum() +
+                ", missesAfterWait=" + missesAfterWait.sum() +
+                ", evictions=" + evictions.sum() +
                 '}';
     }
 }

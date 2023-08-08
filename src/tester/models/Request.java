@@ -1,7 +1,6 @@
 package tester.models;
 
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
 
 public class Request {
@@ -46,7 +45,7 @@ public class Request {
         return value;
     }
 
-    public Future<String> getResponse() {
+    public Future getResponse() {
         return response.getResult();
     }
 

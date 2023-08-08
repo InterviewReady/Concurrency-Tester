@@ -18,6 +18,7 @@ public class Database implements DatabaseInterface {
     private final LongAdder batchCompletion = new LongAdder(),
             clearance = new LongAdder(),
             concurrentRequests = new LongAdder(),
+            failures = new LongAdder(),
             hits = new LongAdder();
 
     public Database(final int batchThreshold, double failureRate) {
@@ -27,7 +28,7 @@ public class Database implements DatabaseInterface {
         requestCount = new ConcurrentHashMap<>(batchRequestThreshold);
         pendingCalls = new ArrayList<>();
         executorService = Executors.newSingleThreadScheduledExecutor();
-        executorService.scheduleAtFixedRate(this::completePendingRequests, 0, 10, TimeUnit.MILLISECONDS);
+        executorService.scheduleAtFixedRate(this::completePendingRequests, 0, 1, TimeUnit.MILLISECONDS);
     }
 
     public Future<String> get(String key) {
@@ -69,13 +70,17 @@ public class Database implements DatabaseInterface {
                 List<DBCall> completedRequests = new ArrayList<>();
                 Collections.shuffle(pendingCalls);
                 for (final var call : pendingCalls) {
-                    boolean oldEntry = System.nanoTime() - call.startTime > 10000000;
-                    if (clearAll || oldEntry) {
+                    final boolean oldEntry = System.nanoTime() - call.startTime > 1000000;
+                    final DatabaseRequest request = call.request;
+                    final CompletableFuture<String> response = call.response;
+                    if (Math.random() < failureRate) {
+                        failures.increment();
+                        call.response.completeExceptionally(new DBFailure());
+                        completedRequests.add(call);
+                    } else if (clearAll || oldEntry) {
                         if (!clearAll) {
                             clearance.sum();
                         }
-                        DatabaseRequest request = call.request;
-                        CompletableFuture<String> response = call.response;
                         if (request.type.equals(DBRType.GET)) {
                             response.complete(getKey(request.key));
                         } else {
@@ -87,8 +92,7 @@ public class Database implements DatabaseInterface {
                 }
                 completedRequests.forEach(dbCall -> {
                     pendingCalls.remove(dbCall);
-                    String key = dbCall.request.key;
-                    requestCount.get(key).decrement();
+                    requestCount.get(dbCall.request.key).decrement();
                 });
             }
             lock.writeLock().unlock();
@@ -108,6 +112,7 @@ public class Database implements DatabaseInterface {
         return "clearances: " + clearance.sum()
                 + " batchCompletions: " + batchCompletion.sum()
                 + " concurrentRequests: " + concurrentRequests.sum()
+                + " failures: " + failures.sum()
                 + " hits: " + hits.sum();
     }
 }
